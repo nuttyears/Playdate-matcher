@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# Env and secrets (never commit)
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Dependencies
+node_modules/
+
+# Logs and build
+*.log
+npm-debug.log*
+dist/
+build/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

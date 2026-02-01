@@ -15,6 +15,76 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
+        // CONFIGURATION - Replace these with your actual values from Supabase and Twilio
+        const SUPABASE_URL = 'https://yoxkgzxcqkliwxevgarm.supabase.co'; // e.g., https://xxxxx.supabase.co
+        const SUPABASE_ANON_KEY = 'sb_publishable_TcL1LMmxu5hKNVsHkPMi_A_lT0xVAov'; // Your anon/public key from Supabase
+
+        // Simple Supabase client
+        class SupabaseClient {
+          constructor(url, key) {
+            this.url = url;
+            this.key = key;
+            this.headers = {
+              'apikey': key,
+              'Authorization': `Bearer ${key}`,
+              'Content-Type': 'application/json'
+            };
+          }
+
+          async query(table, options = {}) {
+            const { select = '*', filter, insert, update, delete: deleteId } = options;
+            
+            let url = `${this.url}/rest/v1/${table}`;
+            let method = 'GET';
+            let body = null;
+
+            if (insert) {
+              method = 'POST';
+              body = JSON.stringify(insert);
+              url += '?select=*';
+            } else if (update) {
+              method = 'PATCH';
+              body = JSON.stringify(update);
+              url += `?${filter}&select=*`;
+            } else if (deleteId) {
+              method = 'DELETE';
+              url += `?id=eq.${deleteId}`;
+            } else if (filter) {
+              url += `?${filter}&select=${select}`;
+            } else {
+              url += `?select=${select}`;
+            }
+
+            const response = await fetch(url, {
+              method,
+              headers: this.headers,
+              body
+            });
+
+            if (!response.ok) {
+              throw new Error(`Supabase error: ${response.statusText}`);
+            }
+
+            return method === 'DELETE' ? null : await response.json();
+          }
+
+          async callFunction(functionName, params) {
+            const response = await fetch(`${this.url}/functions/v1/${functionName}`, {
+              method: 'POST',
+              headers: this.headers,
+              body: JSON.stringify(params)
+            });
+            
+            if (!response.ok) {
+              throw new Error(`Function call error: ${response.statusText}`);
+            }
+            
+            return await response.json();
+          }
+        }
+
+        const supabase = new SupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
         // Lucide Icons as inline SVG components
         const Calendar = ({ className }) => (
             <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -89,73 +159,217 @@
             </svg>
         );
 
+        const Bell = ({ className }) => (
+            <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+            </svg>
+        );
+
         const PlaydateMatcher = () => {
           const [currentView, setCurrentView] = useState('dashboard');
           const [profile, setProfile] = useState(null);
           const [playdates, setPlaydates] = useState([]);
           const [editingPlaydate, setEditingPlaydate] = useState(null);
+          const [loading, setLoading] = useState(true);
+          const [error, setError] = useState(null);
+
+          const isSupabaseConfigured = SUPABASE_URL !== 'YOUR_SUPABASE_URL' && SUPABASE_ANON_KEY !== 'YOUR_SUPABASE_ANON_KEY';
 
           useEffect(() => {
-            const savedProfile = localStorage.getItem('playdateProfile');
-            const savedPlaydates = localStorage.getItem('playdates');
-            
-            if (savedProfile) setProfile(JSON.parse(savedProfile));
-            if (savedPlaydates) setPlaydates(JSON.parse(savedPlaydates));
+            loadData();
           }, []);
 
-          const saveProfile = (newProfile) => {
-            setProfile(newProfile);
-            localStorage.setItem('playdateProfile', JSON.stringify(newProfile));
-            setCurrentView('dashboard');
-          };
-
-          const savePlaydates = (newPlaydates) => {
-            setPlaydates(newPlaydates);
-            localStorage.setItem('playdates', JSON.stringify(newPlaydates));
-          };
-
-          const savePlaydate = (playdate) => {
-            if (editingPlaydate) {
-              const updated = playdates.map(p => p.id === editingPlaydate.id ? playdate : p);
-              savePlaydates(updated);
-            } else {
-              savePlaydates([...playdates, { ...playdate, id: Date.now(), responses: [], status: 'planning' }]);
-            }
-            setEditingPlaydate(null);
-            setCurrentView('dashboard');
-          };
-
-          const deletePlaydate = (id) => {
-            savePlaydates(playdates.filter(p => p.id !== id));
-          };
-
-          const updateStatus = (id, status) => {
-            const updated = playdates.map(p => p.id === id ? { ...p, status } : p);
-            savePlaydates(updated);
-          };
-
-          useEffect(() => {
-            const checkReminders = () => {
-              const now = new Date();
-              const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+          const loadData = async () => {
+            try {
+              setLoading(true);
               
-              playdates.forEach(playdate => {
-                if (playdate.status === 'confirmed') {
-                  const playdateDate = new Date(playdate.date + ' ' + playdate.time);
-                  if (playdateDate > now && playdateDate <= oneDayFromNow && playdate.responses.length > 0) {
-                    console.log(`Reminder: Playdate "${playdate.title}" is coming up!`);
+              if (isSupabaseConfigured) {
+                const profileId = localStorage.getItem('profileId');
+                
+                if (profileId) {
+                  const [profileData, playdatesData] = await Promise.all([
+                    supabase.query('profiles', { filter: `id=eq.${profileId}` }),
+                    supabase.query('playdates', { filter: `creator_id=eq.${profileId}` })
+                  ]);
+                  
+                  if (profileData && profileData.length > 0) {
+                    setProfile(profileData[0]);
+                  }
+                  
+                  setPlaydates(playdatesData || []);
+                }
+              } else {
+                const savedProfile = localStorage.getItem('playdateProfile');
+                const savedPlaydates = localStorage.getItem('playdates');
+                
+                if (savedProfile) setProfile(JSON.parse(savedProfile));
+                if (savedPlaydates) setPlaydates(JSON.parse(savedPlaydates));
+              }
+            } catch (err) {
+              setError(err.message);
+              console.error('Load error:', err);
+            } finally {
+              setLoading(false);
+            }
+          };
+
+          const saveProfile = async (newProfile) => {
+            try {
+              if (isSupabaseConfigured) {
+                const result = await supabase.query('profiles', {
+                  insert: newProfile
+                });
+                
+                if (result && result.length > 0) {
+                  const savedProfile = result[0];
+                  setProfile(savedProfile);
+                  localStorage.setItem('profileId', savedProfile.id);
+                }
+              } else {
+                setProfile(newProfile);
+                localStorage.setItem('playdateProfile', JSON.stringify(newProfile));
+              }
+              
+              setCurrentView('dashboard');
+            } catch (err) {
+              setError(err.message);
+              console.error('Save profile error:', err);
+            }
+          };
+
+          const savePlaydate = async (playdateData) => {
+            try {
+              if (isSupabaseConfigured && profile) {
+                const dataToSave = {
+                  ...playdateData,
+                  creator_id: profile.id,
+                  status: editingPlaydate ? playdateData.status : 'planning'
+                };
+
+                if (editingPlaydate) {
+                  const result = await supabase.query('playdates', {
+                    update: dataToSave,
+                    filter: `id=eq.${editingPlaydate.id}`
+                  });
+                  
+                  setPlaydates(playdates.map(p => p.id === editingPlaydate.id ? result[0] : p));
+                } else {
+                  const result = await supabase.query('playdates', {
+                    insert: dataToSave
+                  });
+                  
+                  if (result && result.length > 0) {
+                    setPlaydates([...playdates, result[0]]);
                   }
                 }
+              } else {
+                if (editingPlaydate) {
+                  const updated = playdates.map(p => p.id === editingPlaydate.id ? playdateData : p);
+                  setPlaydates(updated);
+                  localStorage.setItem('playdates', JSON.stringify(updated));
+                } else {
+                  const newPlaydates = [...playdates, { ...playdateData, id: Date.now(), status: 'planning' }];
+                  setPlaydates(newPlaydates);
+                  localStorage.setItem('playdates', JSON.stringify(newPlaydates));
+                }
+              }
+              
+              setEditingPlaydate(null);
+              setCurrentView('dashboard');
+            } catch (err) {
+              setError(err.message);
+              console.error('Save playdate error:', err);
+            }
+          };
+
+          const deletePlaydate = async (id) => {
+            try {
+              if (isSupabaseConfigured) {
+                await supabase.query('playdates', { delete: id });
+              }
+              
+              const updated = playdates.filter(p => p.id !== id);
+              setPlaydates(updated);
+              
+              if (!isSupabaseConfigured) {
+                localStorage.setItem('playdates', JSON.stringify(updated));
+              }
+            } catch (err) {
+              setError(err.message);
+              console.error('Delete error:', err);
+            }
+          };
+
+          const updateStatus = async (id, status) => {
+            try {
+              const playdate = playdates.find(p => p.id === id);
+              
+              if (isSupabaseConfigured) {
+                const result = await supabase.query('playdates', {
+                  update: { status },
+                  filter: `id=eq.${id}`
+                });
+                
+                setPlaydates(playdates.map(p => p.id === id ? result[0] : p));
+                
+                if (status === 'confirmed' && profile) {
+                  await sendConfirmationSMS(playdate, profile);
+                }
+              } else {
+                const updated = playdates.map(p => p.id === id ? { ...p, status } : p);
+                setPlaydates(updated);
+                localStorage.setItem('playdates', JSON.stringify(updated));
+              }
+            } catch (err) {
+              setError(err.message);
+              console.error('Update status error:', err);
+            }
+          };
+
+          const sendConfirmationSMS = async (playdate, profile) => {
+            try {
+              await supabase.callFunction('send_sms_notification', {
+                playdate_id: playdate.id,
+                phone_number: profile.parent_phone || profile.parentPhone,
+                message_type: 'confirmation'
               });
-            };
-            
-            checkReminders();
-            const interval = setInterval(checkReminders, 60000);
-            return () => clearInterval(interval);
-          }, [playdates]);
+            } catch (err) {
+              console.error('SMS error:', err);
+            }
+          };
+
+          if (loading) {
+            return (
+              <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50 flex items-center justify-center">
+                <div className="text-center">
+                  <Users className="w-16 h-16 text-purple-600 mx-auto mb-4 animate-pulse" />
+                  <p className="text-gray-600">Loading...</p>
+                </div>
+              </div>
+            );
+          }
 
           return (
             <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50">
+              {!isSupabaseConfigured && (
+                <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-3">
+                  <div className="max-w-4xl mx-auto flex items-center gap-2 text-sm text-yellow-800">
+                    <Bell className="w-4 h-4" />
+                    <span>Using local storage. Set up Supabase + Twilio for SMS notifications and reminders.</span>
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="bg-red-50 border-b border-red-200 px-4 py-3">
+                  <div className="max-w-4xl mx-auto flex items-center gap-2 text-sm text-red-800">
+                    <span>Error: {error}</span>
+                    <button onClick={() => setError(null)} className="ml-auto text-red-600 hover:text-red-800">×</button>
+                  </div>
+                </div>
+              )}
+
               <header className="bg-white shadow-sm">
                 <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -168,14 +382,14 @@
                       className="flex items-center gap-2 px-4 py-2 text-purple-600 hover:bg-purple-50 rounded-lg transition"
                     >
                       <User className="w-5 h-5" />
-                      <span>{profile.kidName}</span>
+                      <span>{profile.kid_name || profile.kidName}</span>
                     </button>
                   )}
                 </div>
               </header>
 
               <main className="max-w-4xl mx-auto px-4 py-8">
-                {!profile && <OnboardingView onComplete={saveProfile} />}
+                {!profile && <OnboardingView onComplete={saveProfile} isSupabaseConfigured={isSupabaseConfigured} />}
                 {profile && currentView === 'dashboard' && (
                   <DashboardView 
                     playdates={playdates}
@@ -189,6 +403,7 @@
                     }}
                     onDelete={deletePlaydate}
                     onUpdateStatus={updateStatus}
+                    isSupabaseConfigured={isSupabaseConfigured}
                   />
                 )}
                 {profile && currentView === 'create' && (
@@ -214,16 +429,16 @@
           );
         };
 
-        const OnboardingView = ({ onComplete }) => {
+        const OnboardingView = ({ onComplete, isSupabaseConfigured }) => {
           const [formData, setFormData] = useState({
-            kidName: '',
-            zipCode: '',
-            parentPhone: ''
+            kid_name: '',
+            zip_code: '',
+            parent_phone: ''
           });
 
           const handleSubmit = (e) => {
             e.preventDefault();
-            if (formData.kidName && formData.zipCode && formData.parentPhone) {
+            if (formData.kid_name && formData.zip_code && formData.parent_phone) {
               onComplete(formData);
             }
           };
@@ -237,6 +452,9 @@
                   </div>
                   <h2 className="text-2xl font-bold text-gray-800 mb-2">Welcome to Playdate Matcher!</h2>
                   <p className="text-gray-600">Let's set up your profile to get started</p>
+                  {isSupabaseConfigured && (
+                    <p className="text-sm text-green-600 mt-2">📱 You'll receive SMS confirmations and reminders</p>
+                  )}
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
@@ -247,8 +465,8 @@
                     <input
                       type="text"
                       required
-                      value={formData.kidName}
-                      onChange={(e) => setFormData({ ...formData, kidName: e.target.value })}
+                      value={formData.kid_name}
+                      onChange={(e) => setFormData({ ...formData, kid_name: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       placeholder="Emma"
                     />
@@ -262,8 +480,8 @@
                       type="text"
                       required
                       pattern="[0-9]{5}"
-                      value={formData.zipCode}
-                      onChange={(e) => setFormData({ ...formData, zipCode: e.target.value })}
+                      value={formData.zip_code}
+                      onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       placeholder="94102"
                     />
@@ -276,11 +494,16 @@
                     <input
                       type="tel"
                       required
-                      value={formData.parentPhone}
-                      onChange={(e) => setFormData({ ...formData, parentPhone: e.target.value })}
+                      value={formData.parent_phone}
+                      onChange={(e) => setFormData({ ...formData, parent_phone: e.target.value })}
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       placeholder="(555) 123-4567"
                     />
+                    {isSupabaseConfigured && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        📱 We'll text you playdate confirmations and reminders
+                      </p>
+                    )}
                   </div>
 
                   <button
@@ -295,7 +518,7 @@
           );
         };
 
-        const DashboardView = ({ playdates, onNewPlaydate, onEdit, onDelete, onUpdateStatus }) => {
+        const DashboardView = ({ playdates, onNewPlaydate, onEdit, onDelete, onUpdateStatus, isSupabaseConfigured }) => {
           const upcomingPlaydates = playdates.filter(p => p.status !== 'completed');
           const completedPlaydates = playdates.filter(p => p.status === 'completed');
 
@@ -311,6 +534,20 @@
                   New Playdate
                 </button>
               </div>
+
+              {isSupabaseConfigured && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <Check className="w-5 h-5 text-green-600 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-green-900 mb-1">📱 SMS Notifications Active</h3>
+                      <p className="text-sm text-green-700">
+                        Confirmations and reminders will be sent automatically via text message
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {upcomingPlaydates.length === 0 && completedPlaydates.length === 0 && (
                 <div className="bg-white rounded-2xl shadow-md p-12 text-center">
@@ -337,6 +574,7 @@
                         onEdit={() => onEdit(playdate)}
                         onDelete={() => onDelete(playdate.id)}
                         onUpdateStatus={(status) => onUpdateStatus(playdate.id, status)}
+                        isSupabaseConfigured={isSupabaseConfigured}
                       />
                     ))}
                   </div>
@@ -354,6 +592,7 @@
                         onEdit={() => onEdit(playdate)}
                         onDelete={() => onDelete(playdate.id)}
                         onUpdateStatus={(status) => onUpdateStatus(playdate.id, status)}
+                        isSupabaseConfigured={isSupabaseConfigured}
                       />
                     ))}
                   </div>
@@ -363,7 +602,7 @@
           );
         };
 
-        const PlaydateCard = ({ playdate, onEdit, onDelete, onUpdateStatus }) => {
+        const PlaydateCard = ({ playdate, onEdit, onDelete, onUpdateStatus, isSupabaseConfigured }) => {
           const statusColors = {
             planning: 'bg-yellow-100 text-yellow-800',
             confirmed: 'bg-green-100 text-green-800',
@@ -385,6 +624,12 @@
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[playdate.status]}`}>
                       {statusLabels[playdate.status]}
                     </span>
+                    {playdate.status === 'confirmed' && isSupabaseConfigured && (
+                      <span className="flex items-center gap-1 text-xs text-green-600">
+                        <Phone className="w-3 h-3" />
+                        SMS sent
+                      </span>
+                    )}
                   </div>
                   
                   <div className="space-y-2 text-gray-600">
@@ -443,7 +688,7 @@
                       className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-700 transition"
                     >
                       <Check className="w-4 h-4" />
-                      Confirm Playdate
+                      {isSupabaseConfigured ? 'Confirm & Send SMS' : 'Confirm Playdate'}
                     </button>
                   )}
                   {playdate.status === 'confirmed' && (
@@ -651,7 +896,7 @@
                       <User className="w-6 h-6 text-purple-600 mt-1" />
                       <div>
                         <div className="text-sm text-gray-600">Child's Name</div>
-                        <div className="text-lg font-semibold text-gray-800">{profile.kidName}</div>
+                        <div className="text-lg font-semibold text-gray-800">{profile.kid_name || profile.kidName}</div>
                       </div>
                     </div>
 
@@ -659,7 +904,7 @@
                       <Home className="w-6 h-6 text-purple-600 mt-1" />
                       <div>
                         <div className="text-sm text-gray-600">Zip Code</div>
-                        <div className="text-lg font-semibold text-gray-800">{profile.zipCode}</div>
+                        <div className="text-lg font-semibold text-gray-800">{profile.zip_code || profile.zipCode}</div>
                       </div>
                     </div>
 
@@ -667,7 +912,7 @@
                       <Phone className="w-6 h-6 text-purple-600 mt-1" />
                       <div>
                         <div className="text-sm text-gray-600">Phone Number</div>
-                        <div className="text-lg font-semibold text-gray-800">{profile.parentPhone}</div>
+                        <div className="text-lg font-semibold text-gray-800">{profile.parent_phone || profile.parentPhone}</div>
                       </div>
                     </div>
 
@@ -687,8 +932,8 @@
                       <input
                         type="text"
                         required
-                        value={formData.kidName}
-                        onChange={(e) => setFormData({ ...formData, kidName: e.target.value })}
+                        value={formData.kid_name || formData.kidName}
+                        onChange={(e) => setFormData({ ...formData, kid_name: e.target.value })}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       />
                     </div>
@@ -701,8 +946,8 @@
                         type="text"
                         required
                         pattern="[0-9]{5}"
-                        value={formData.zipCode}
-                        onChange={(e) => setFormData({ ...formData, zipCode: e.target.value })}
+                        value={formData.zip_code || formData.zipCode}
+                        onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       />
                     </div>
@@ -714,8 +959,8 @@
                       <input
                         type="tel"
                         required
-                        value={formData.parentPhone}
-                        onChange={(e) => setFormData({ ...formData, parentPhone: e.target.value })}
+                        value={formData.parent_phone || formData.parentPhone}
+                        onChange={(e) => setFormData({ ...formData, parent_phone: e.target.value })}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       />
                     </div>
