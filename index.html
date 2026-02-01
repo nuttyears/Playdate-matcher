@@ -72,15 +72,31 @@
           async callFunction(functionName, params) {
             const response = await fetch(`${this.url}/functions/v1/${functionName}`, {
               method: 'POST',
-              headers: this.headers,
+              headers: {
+                'Authorization': `Bearer ${this.key}`,
+                'Content-Type': 'application/json'
+              },
               body: JSON.stringify(params)
             });
             
+            const text = await response.text();
+            
             if (!response.ok) {
+              console.error('Function error response:', text);
               throw new Error(`Function call error: ${response.statusText}`);
             }
             
-            return await response.json();
+            // Only parse JSON if there's content
+            if (text) {
+              try {
+                return JSON.parse(text);
+              } catch (e) {
+                console.error('Could not parse response:', text);
+                return null;
+              }
+            }
+            
+            return null;
           }
         }
 
